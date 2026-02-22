@@ -60,6 +60,7 @@ This project follows a strict separation between "Sandbox" (Notebooks) and "Prod
 │   ├── __init__.py          # Python package
 │   ├── load_data.py         # Ingest raw data
 │   ├── clean_data.py        # Preprocessing & cleaning
+│   ├── features.py          # Feature engineering
 │   ├── validate.py          # Data quality checks
 │   ├── train.py             # Model training & saving
 │   ├── evaluate.py          # Metrics & plotting
