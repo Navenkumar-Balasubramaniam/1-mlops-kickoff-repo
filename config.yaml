@@ -1,10 +1,31 @@
 # MLOps Project Configuration
 # This file will eventually control paths, hyperparameters, and toggles.
+# Central pipeline configuration (YAML)
+# This file is meant to be the single place you adjust paths, targets, and feature lists.
 
 data:
-  raw: "data/raw/dataset.csv"
-  processed: "data/processed/clean.csv"
+  raw_path: "data/raw/f1_all.parquet"
+  processed_path: "data/processed/clean.csv"
 
-train:
+artifacts:
+  model_path: "models/model.joblib"
+  predictions_path: "reports/predictions.csv"
+
+task:
+  # Use: "regression" or "classification"
+  problem_type: "regression"
+  # Set this to your real target column name from the notebook
+  target_column: "milliseconds"
+
+split:
   test_size: 0.2
-  seed: 42
+  random_state: 42
+
+features:
+  # IMPORTANT:
+  # Fill these based on your notebook’s final feature set.
+  # Keep them empty until you map your dataset columns.
+  quantile_bin: []
+  categorical_onehot: []
+  numeric_passthrough: []
+  n_bins: 3
