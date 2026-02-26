@@ -1,11 +1,15 @@
-name: mlops-kickoff-env
+name: mlops-student-env
 channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.8
+  - python>=3.9
   - pandas
+  - numpy
+  - scikit-learn
+  - joblib
+  - jupyter
+  - ipykernel
+  - pytest
+  - pytest-cov
   - pip
-  - pip:
-    - flake8
-  
