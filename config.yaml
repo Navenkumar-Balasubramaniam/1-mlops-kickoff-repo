@@ -16,16 +16,52 @@ task:
   problem_type: "regression"
   # Set this to your real target column name from the notebook
   target_column: "milliseconds"
-
-split:
-  test_size: 0.2
-  random_state: 42
+  year_column: "year"
+  test_year: 2023
 
 features:
-  # IMPORTANT:
-  # Fill these based on your notebook’s final feature set.
-  # Keep them empty until you map your dataset columns.
-  quantile_bin: []
-  categorical_onehot: []
-  numeric_passthrough: []
-  n_bins: 3
+  # StandardScaler will be applied to ALL numeric listed here
+  numeric_passthrough:
+    - lap
+    - grid
+    - Stint
+    - TyreLife
+    - TrackTemp
+    - Humidity
+    - Pressure
+    - Rainfall
+    - WindSpeed
+    - WindDirection
+
+# OneHotEncoder(drop="first", handle_unknown="ignore")
+  categorical_onehot:
+    - round
+    - name
+    - constructorId
+    - code
+    - Compound
+    - FreshTyre
+
+cleaning:
+  # Notebook-aligned cleaning settings
+  dropna_subset:
+    - TyreLife
+    - position_y
+    - milliseconds
+
+# Leakage + ID columns to drop (exists in your parquet)
+  drop_columns:
+    - Driver
+    - LapNumber
+    - time
+    - circuitId
+    - driverId
+    - statusId
+    - raceId
+    - position_x
+    - position_y
+    - status
+    - AirTemp
+
+
+
