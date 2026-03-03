@@ -1,15 +1,13 @@
-# tests/test_train.py
 """
 Unit tests for src.train.train_model
 
 This test verifies:
-- train_model can accept a minimal DataFrame and unfitted preprocessor,
+- train_model can accept a DataFrame and unfitted preprocessor,
 - returns a fitted sklearn Pipeline with a working predict method.
 
 Run with:
     pytest -q tests/test_train.py
 """
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,25 +16,25 @@ from src.features import get_feature_preprocessor
 from src.train import train_model
 
 
-def make_dummy_data():
-    # Create a tiny, deterministic dataset matching baseline SETTINGS
+def make_dummy_data(n=50):
+    rng = np.random.default_rng(42)
+
     X = pd.DataFrame(
         {
-            "num_feature": [0.0, 1.0, 2.0, 3.0, 4.0],
-            "cat_feature": ["a", "b", "a", "b", "c"],
+            "num_feature": np.linspace(0, 10, n),
+            "cat_feature": rng.choice(["a", "b", "c"], size=n),
         }
     )
-    y = pd.Series([0, 1, 0, 1, 0], name="target")
-    return X, y
+
+    y_cls = pd.Series((X["num_feature"] > 5).astype(int), name="target")
+    y_reg = pd.Series(X["num_feature"] * 0.5 + rng.normal(0, 0.1, size=n), name="target")
+
+    return X, y_cls, y_reg
 
 
 def test_train_model_fits_and_predicts_classification():
-    """
-    Train a simple classification pipeline and ensure predict works and shapes match.
-    """
-    X, y = make_dummy_data()
+    X, y_cls, _ = make_dummy_data(n=50)
 
-    # Build unfitted preprocessor matching the dummy columns
     preprocessor = get_feature_preprocessor(
         quantile_bin_cols=[],
         categorical_onehot_cols=["cat_feature"],
@@ -44,27 +42,17 @@ def test_train_model_fits_and_predicts_classification():
         n_bins=3,
     )
 
-    model = train_model(X_train=X, y_train=y, preprocessor=preprocessor, problem_type="classification")
+    model = train_model(X_train=X, y_train=y_cls, preprocessor=preprocessor, problem_type="classification")
 
-    # Basic sanity checks
-    assert hasattr(model, "predict"), "Returned model must implement predict()"
+    assert hasattr(model, "predict")
     preds = model.predict(X)
-    assert len(preds) == len(X), "Number of predictions must match number of input rows"
 
-    # Predictions for classification should be integers or convertible to int-like classes
     assert preds.shape == (len(X),)
-    # At least one predicted class should be present (sanity)
-    unique_preds = np.unique(preds)
-    assert unique_preds.size >= 1
+    assert np.unique(preds).size >= 1
 
 
 def test_train_model_fits_and_predicts_regression():
-    """
-    Train a simple regression pipeline and ensure predict works and shapes match.
-    """
-    X, _ = make_dummy_data()
-    # Create a continuous target
-    y_reg = pd.Series([0.1, 1.5, 0.2, 1.8, 0.0], name="target")
+    X, _, y_reg = make_dummy_data(n=50)
 
     preprocessor = get_feature_preprocessor(
         quantile_bin_cols=[],
@@ -76,6 +64,9 @@ def test_train_model_fits_and_predicts_regression():
     model = train_model(X_train=X, y_train=y_reg, preprocessor=preprocessor, problem_type="regression")
 
     preds = model.predict(X)
+
     assert preds.shape == (len(X),)
-    # Regression predictions should be float-ish
     assert preds.dtype.kind in ("f", "i")
+
+    # Extra: verify Lasso selection step exists for regression
+    assert "select" in model.named_steps

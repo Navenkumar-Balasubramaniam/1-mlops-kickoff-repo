@@ -17,8 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
-from sklearn.model_selection import train_test_split
+import yaml
 
 from src.clean_data import clean_dataframe
 from src.evaluate import evaluate_model
@@ -28,56 +27,36 @@ from src.load_data import load_raw_data
 from src.train import train_model
 from src.utils import save_csv, save_model
 from src.validate import validate_dataframe
+from sklearn.metrics import r2_score
 
 
-# -----------------------------------------------------------------------------
-# CONFIGURATION (SETTINGS dictionary bridge)
-# Loud reminder: map these to your dataset columns (we aligned to your notebook)
-# -----------------------------------------------------------------------------
-SETTINGS = {
-    "is_example_config": False,
-    "problem_type": "regression",
-    "target_column": "milliseconds",
-    "year_column": "year",
-    "test_year": 2023,
-    "paths": {
-        "raw_data_path": "data/raw/f1_all.parquet",
-        "processed_data_path": "data/processed/clean.csv",
-        "model_path": "models/model.joblib",
-        "predictions_path": "reports/predictions.csv",
-    },
-    "features": {
-        # In our StandardScaler-only implementation, we treat both lists as numeric-to-scale.
-        "quantile_bin": [],
-        "numeric_passthrough": [
-            "lap",
-            "grid",
-            "Stint",
-            "TyreLife",
-            "TrackTemp",
-            "Humidity",
-            "Pressure",
-            "Rainfall",
-            "WindSpeed",
-            "WindDirection",
-        ],
-        "categorical_onehot": [
-            "round",
-            "name",
-            "constructorId",
-            "code",
-            "Compound",
-            "FreshTyre",
-        ],
-        "n_bins": 3,
-    },
-}
+def load_config(config_path: Path = Path("config.yaml")) -> dict:
+    """
+    Load YAML configuration from disk.
+
+    Raises
+    ------
+    FileNotFoundError
+        If config.yaml is missing.
+    ValueError
+        If config.yaml is empty or invalid.
+    """
+    if not config_path.exists():
+        raise FileNotFoundError(f"config.yaml not found at: {config_path.resolve()}")
+
+    with config_path.open("r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    if not isinstance(cfg, dict) or not cfg:
+        raise ValueError("config.yaml is empty or invalid (expected a YAML mapping).")
+
+    return cfg
 
 
 def main() -> None:
     """
     Inputs:
-    - None (configuration is inside SETTINGS for now)
+    - None (reads config.yaml)
     Outputs:
     - None (creates artifacts on disk)
     Why this contract matters for reliable ML delivery:
@@ -85,87 +64,113 @@ def main() -> None:
     """
     print("[main.main] Starting end-to-end pipeline...")  # TODO: replace with logging later
 
+    cfg = load_config()
+
     # Ensure required directories exist (idempotent)
     Path("data/processed").mkdir(parents=True, exist_ok=True)
     Path("models").mkdir(parents=True, exist_ok=True)
     Path("reports").mkdir(parents=True, exist_ok=True)
 
-    # Paths
-    raw_path = Path(SETTINGS["paths"]["raw_data_path"])
-    processed_path = Path(SETTINGS["paths"]["processed_data_path"])
-    model_path = Path(SETTINGS["paths"]["model_path"])
-    predictions_path = Path(SETTINGS["paths"]["predictions_path"])
+    # Config sections
+    data_cfg = cfg.get("data", {})
+    art_cfg = cfg.get("artifacts", {})
+    task_cfg = cfg.get("task", {})
+    feat_cfg = cfg.get("features", {})
 
-    target_column = SETTINGS["target_column"]
-    problem_type = SETTINGS["problem_type"]
+    # Required config keys (fail fast)
+    raw_path = Path(data_cfg.get("raw_path", ""))
+    processed_path = Path(data_cfg.get("processed_path", ""))
+    model_path = Path(art_cfg.get("model_path", ""))
+    predictions_path = Path(art_cfg.get("predictions_path", ""))
 
-    # 1) Load
+    problem_type = task_cfg.get("problem_type")
+    target_column = task_cfg.get("target_column")
+    year_column = task_cfg.get("year_column")
+    test_year = task_cfg.get("test_year")
+
+    if not raw_path:
+        raise ValueError("config.yaml missing: data.raw_path")
+    if not processed_path:
+        raise ValueError("config.yaml missing: data.processed_path")
+    if not model_path:
+        raise ValueError("config.yaml missing: artifacts.model_path")
+    if not predictions_path:
+        raise ValueError("config.yaml missing: artifacts.predictions_path")
+
+    if problem_type not in {"regression", "classification"}:
+        raise ValueError("config.yaml task.problem_type must be 'regression' or 'classification'")
+    if not target_column:
+        raise ValueError("config.yaml missing: task.target_column")
+    if not year_column:
+        raise ValueError("config.yaml missing: task.year_column (year split is required)")
+    if test_year is None:
+        raise ValueError("config.yaml missing: task.test_year (year split is required)")
+
+    numeric_cols = feat_cfg.get("numeric_passthrough", [])
+    categorical_cols = feat_cfg.get("categorical_onehot", [])
+    quantile_bin_cols = feat_cfg.get("quantile_bin", [])
+    n_bins = feat_cfg.get("n_bins", 3)
+
+    # 1) Load raw data
     df_raw = load_raw_data(raw_path)
 
-    # 2) Clean
+    # 2) Clean data
     df_clean = clean_dataframe(df_raw, target_column=target_column)
 
-    # 3) Save processed CSV (required artifact)
+    # 3) Save processed CSV artifact
     save_csv(df_clean, processed_path)
 
-    # 4) Validate (minimal fail-fast)
-    required_columns = [target_column] + SETTINGS["features"]["numeric_passthrough"] + SETTINGS["features"]["categorical_onehot"]
+    # 4) Validate schema
+    required_columns = [target_column] + list(numeric_cols) + list(categorical_cols)
     validate_dataframe(df_clean, required_columns=required_columns)
 
-    # 5) Split (Notebook-aligned year split if possible)
-    year_col = SETTINGS.get("year_column")
-    test_year = SETTINGS.get("test_year")
+    # 5) Year-based split (REQUIRED)
+    if year_column not in df_clean.columns:
+        raise ValueError(
+            f"Year split required, but year column '{year_column}' not found in cleaned dataframe."
+        )
 
-    if year_col in df_clean.columns and test_year is not None:
-        print(f"[main.main] Using year split: train < {test_year}, test == {test_year}")  # TODO: replace with logging later
-        df_train = df_clean[df_clean[year_col] < test_year].copy()
-        df_test = df_clean[df_clean[year_col] == test_year].copy()
-    else:
-        print("[main.main] Year split not possible; falling back to random train_test_split.")  # TODO: replace with logging later
-        df_train, df_test = train_test_split(df_clean, test_size=0.2, random_state=42)
+    print(f"[main.main] Using year split: train < {test_year}, test == {test_year}")  # TODO: replace with logging later
+    df_train = df_clean[df_clean[year_column] < test_year].copy()
+    df_test = df_clean[df_clean[year_column] == test_year].copy()
+
+    if df_train.empty:
+        raise ValueError(
+            f"Year split produced empty TRAIN set. No rows where {year_column} < {test_year}."
+        )
+    if df_test.empty:
+        raise ValueError(
+            f"Year split produced empty TEST set. No rows where {year_column} == {test_year}."
+        )
 
     X_train = df_train.drop(columns=[target_column])
     y_train = df_train[target_column]
     X_test = df_test.drop(columns=[target_column])
     y_test = df_test[target_column]
 
-    # Stratify only for classification (and guard for edge cases)
-    if problem_type == "classification":
-        try:
-            X_train, X_test, y_train, y_test = train_test_split(
-                df_clean.drop(columns=[target_column]),
-                df_clean[target_column],
-                test_size=0.2,
-                random_state=42,
-                stratify=df_clean[target_column],
-            )
-        except Exception:
-            X_train, X_test, y_train, y_test = train_test_split(
-                df_clean.drop(columns=[target_column]),
-                df_clean[target_column],
-                test_size=0.2,
-                random_state=42,
-                stratify=None,
-            )
-
-    # 6) Fail-fast feature checks
-    configured_cols = SETTINGS["features"]["numeric_passthrough"] + SETTINGS["features"]["categorical_onehot"]
+    # 6) Fail-fast feature presence checks
+    configured_cols = list(numeric_cols) + list(categorical_cols)
     missing_feats = [c for c in configured_cols if c not in X_train.columns]
     if missing_feats:
-        raise ValueError(f"Configured feature columns missing from data: {missing_feats}")
+        raise ValueError(f"Configured feature columns missing from training data: {missing_feats}")
 
-    # 7) Build feature recipe (unfitted)
+    # 7) Build preprocessing recipe (unfitted)
     preprocessor = get_feature_preprocessor(
-        quantile_bin_cols=SETTINGS["features"]["quantile_bin"],
-        categorical_onehot_cols=SETTINGS["features"]["categorical_onehot"],
-        numeric_passthrough_cols=SETTINGS["features"]["numeric_passthrough"],
-        n_bins=SETTINGS["features"]["n_bins"],
+        quantile_bin_cols=quantile_bin_cols,
+        categorical_onehot_cols=categorical_cols,
+        numeric_passthrough_cols=numeric_cols,
+        n_bins=n_bins,
     )
 
-    # 8) Train (fit pipeline on training only)
-    model = train_model(X_train=X_train, y_train=y_train, preprocessor=preprocessor, problem_type=problem_type)
+    # 8) Train model (Pipeline fits preprocess ONLY on train -> leakage-safe)
+    model = train_model(
+        X_train=X_train,
+        y_train=y_train,
+        preprocessor=preprocessor,
+        problem_type=problem_type,
+    )
 
-    # 9) Save model (required artifact)
+    # 9) Save model artifact
     save_model(model, model_path)
 
     # 10) Evaluate
@@ -175,7 +180,7 @@ def main() -> None:
     # 11) Inference (example: run on X_test)
     df_pred = run_inference(model, X_infer=X_test)
 
-    # 12) Save predictions (required artifact)
+    # 12) Save predictions artifact
     save_csv(df_pred, predictions_path)
 
     # --------------------------------------------------------
@@ -192,6 +197,11 @@ def main() -> None:
 
     print("[main.main] Pipeline completed successfully.")  # TODO: replace with logging later
 
+    train_preds = model.predict(X_train)
+    test_preds = model.predict(X_test)
+
+    print("Train R2:", r2_score(y_train, train_preds))
+    print("Test  R2:", r2_score(y_test, test_preds))
 
 if __name__ == "__main__":
     main()

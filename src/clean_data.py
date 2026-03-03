@@ -9,12 +9,26 @@ Educational Goal:
   returns a cleaned pandas DataFrame ready for splitting and feature building.
 
 TODO: Replace print statements with standard library logging in a later session
-TODO: Any temporary or hardcoded variable or parameter will be imported from config.yml in a later session
+TODO: Any temporary or hardcoded variable or parameter will be imported from config.yml
+in a later session
 """
 
 from __future__ import annotations
 
 import pandas as pd
+from pathlib import Path
+import yaml
+
+
+def _load_config(config_path: Path = Path("config.yaml")) -> dict:
+    """
+    Internal helper to load YAML config.
+    Keeps config parsing out of main logic.
+    """
+    if not config_path.exists():
+        return {}
+    with config_path.open("r") as f:
+        return yaml.safe_load(f) or {}
 
 
 def clean_dataframe(df_raw: pd.DataFrame, target_column: str) -> pd.DataFrame:
@@ -55,46 +69,32 @@ def clean_dataframe(df_raw: pd.DataFrame, target_column: str) -> pd.DataFrame:
 
     df_clean = df_raw.copy()
 
-    # 1) Type enforcement for target (convert bad strings → NaN)
-    df_clean[target_column] = pd.to_numeric(
-        df_clean[target_column], errors="coerce"
-    )
+    # Load cleaning rules from config.yaml (single source of truth)
+    cfg = _load_config()
+    cleaning_cfg = (cfg.get("cleaning") or {})
 
-    # 2) Drop rows missing key modeling columns
-    required_non_null = [target_column]
-    if "position_y" in df_clean.columns:
-        required_non_null.append("position_y")
+    dropna_subset = cleaning_cfg.get("dropna_subset", [])
+    drop_columns = cleaning_cfg.get("drop_columns", [])
 
-    df_clean = df_clean.dropna(subset=required_non_null)
+    # Always enforce target exists in dropna_subset (if user forgot)
+    if target_column not in dropna_subset:
+        dropna_subset = [target_column] + list(dropna_subset)
 
-    # 3) Drop redundant ID-like columns
-    cols_to_drop_if_present = [
-        "Driver",
-        "LapNumber",
-        "time",
-        "circuitId",
-        "driverId",
-        "statusId",
-        "raceId",
-    ]
+    # 1) Type enforcement for target
+    df_clean[target_column] = pd.to_numeric(df_clean[target_column], errors="coerce")
 
-    df_clean = df_clean.drop(
-        columns=[c for c in cols_to_drop_if_present if c in df_clean.columns],
-        errors="ignore",
-    )
+    # 2) Drop rows missing required columns (from config)
+    existing_dropna_cols = [c for c in dropna_subset if c in df_clean.columns]
+    if existing_dropna_cols:
+        df_clean = df_clean.dropna(subset=existing_dropna_cols)
 
-    # 4) Leakage prevention
-    # IMPORTANT: do NOT drop position_y (used in modeling)
-    leakage_cols = ["position_x", "status"]
+    # 3) Drop columns (from config)
+    existing_drop_cols = [c for c in drop_columns if c in df_clean.columns]
+    if existing_drop_cols:
+        df_clean = df_clean.drop(columns=existing_drop_cols, errors="ignore")
 
-    df_clean = df_clean.drop(
-        columns=[c for c in leakage_cols if c in df_clean.columns],
-        errors="ignore",
-    )
-
-    # 5) Normalize missing markers (object columns only)
-    obj_cols = df_clean.select_dtypes(include=["object"]).columns
-
+    # 4) Normalize missing markers (object columns only)
+    obj_cols = df_clean.select_dtypes(include=["object", "string"]).columns
     if len(obj_cols) > 0:
         df_clean[obj_cols] = (
             df_clean[obj_cols]
@@ -102,27 +102,15 @@ def clean_dataframe(df_raw: pd.DataFrame, target_column: str) -> pd.DataFrame:
             .fillna("UNKNOWN")
         )
 
-    # 6) Outlier trimming using IQR (if sufficient rows)
+    # 5) Outlier trimming using IQR (still notebook-aligned)
     if df_clean[target_column].shape[0] > 10:
         q1 = df_clean[target_column].quantile(0.25)
         q3 = df_clean[target_column].quantile(0.75)
         iqr = q3 - q1
-
         if pd.notna(iqr) and iqr > 0:
             lower = q1 - 1.5 * iqr
             upper = q3 + 1.5 * iqr
-            df_clean = df_clean[
-                (df_clean[target_column] >= lower)
-                & (df_clean[target_column] <= upper)
-            ]
-
-    # 7) Drop known highly correlated column if present
-    if "AirTemp" in df_clean.columns:
-        df_clean = df_clean.drop(columns=["AirTemp"], errors="ignore")
-
-    # Final contract checks
-    if target_column not in df_clean.columns:
-        raise RuntimeError("Target column was removed during cleaning.")
+            df_clean = df_clean[(df_clean[target_column] >= lower) & (df_clean[target_column] <= upper)]
 
     if df_clean.empty:
         raise ValueError("Cleaning resulted in empty dataframe.")

@@ -46,7 +46,6 @@ cleaning:
   # Notebook-aligned cleaning settings
   dropna_subset:
     - TyreLife
-    - position_y
     - milliseconds
 
 # Leakage + ID columns to drop (exists in your parquet)
@@ -62,6 +61,30 @@ cleaning:
     - position_y
     - status
     - AirTemp
+
+training:
+  random_state: 42
+
+  regression:
+    use_lasso_feature_selection: true
+
+    lasso:
+      cv: 5
+      n_alphas: 100
+      max_iter: 20000
+      threshold: 0.0
+
+    linear_regression:
+      # sklearn LinearRegression params
+      fit_intercept: true
+      n_jobs: null
+      positive: false
+
+  classification:
+    logistic_regression:
+      max_iter: 500
+      C: 1.0
+      solver: "lbfgs"
 
 
 

@@ -13,10 +13,19 @@ TODO: Any temporary or hardcoded variable or parameter will be imported from con
 
 from __future__ import annotations
 
+from pathlib import Path
+import yaml
 import pandas as pd
 from sklearn.feature_selection import SelectFromModel
 from sklearn.linear_model import LassoCV, LinearRegression, LogisticRegression
 from sklearn.pipeline import Pipeline
+
+
+def _load_config(config_path: Path = Path("config.yaml")) -> dict:
+    if not config_path.exists():
+        return {}
+    with config_path.open("r") as f:
+        return yaml.safe_load(f) or {}
 
 
 def train_model(X_train: pd.DataFrame, y_train: pd.Series, preprocessor, problem_type: str):
@@ -37,53 +46,54 @@ def train_model(X_train: pd.DataFrame, y_train: pd.Series, preprocessor, problem
     if problem_type not in {"regression", "classification"}:
         raise ValueError("problem_type must be either 'regression' or 'classification'")
 
-    # Notebook-aligned defaults:
-    # Regression: preprocess -> LassoCV feature selection -> LinearRegression
+    cfg = _load_config()
+    training_cfg = cfg.get("training", {})
+    random_state = training_cfg.get("random_state", 42)
+
     if problem_type == "regression":
-        selector = SelectFromModel(
-            estimator=LassoCV(
-                cv=5,
-                n_alphas=100,
-                max_iter=20000,
-                random_state=42,
-            ),
-            # threshold=0.0 keeps features with non-zero coefficients
-            threshold=0.0,
-        )
+        reg_cfg = training_cfg.get("regression", {})
+        use_lasso = reg_cfg.get("use_lasso_feature_selection", True)
 
-        model = Pipeline(
-            steps=[
-                ("preprocess", preprocessor),
-                ("select", selector),
-                ("model", LinearRegression()),
-            ]
-        )
+        lr_params = (reg_cfg.get("linear_regression") or {})
+        estimator = LinearRegression(**lr_params)
 
-    # Classification: keep simple baseline (LassoCV is not appropriate here)
+        steps = [("preprocess", preprocessor)]
+
+        if use_lasso:
+            lasso_cfg = reg_cfg.get("lasso", {})
+            selector = SelectFromModel(
+                estimator=LassoCV(
+                    cv=lasso_cfg.get("cv", 5),
+                    n_alphas=lasso_cfg.get("n_alphas", 100),
+                    max_iter=lasso_cfg.get("max_iter", 20000),
+                    random_state=random_state,
+                ),
+                threshold=lasso_cfg.get("threshold", 0.0),
+            )
+            steps.append(("select", selector))
+
+        steps.append(("model", estimator))
+        model = Pipeline(steps=steps)
+
     else:
+        clf_cfg = training_cfg.get("classification", {})
+        logreg_params = (clf_cfg.get("logistic_regression") or {})
+        estimator = LogisticRegression(**logreg_params)
+
         model = Pipeline(
             steps=[
                 ("preprocess", preprocessor),
-                ("model", LogisticRegression(max_iter=500)),
+                ("model", estimator),
             ]
         )
 
-    # Fit entire pipeline on training data ONLY (preprocess + selector + model)
     model.fit(X_train, y_train)
 
     # --------------------------------------------------------
     # START STUDENT CODE
     # --------------------------------------------------------
-    # TODO_STUDENT: Make LassoCV parameters configurable via config.yml
-    # (cv, n_alphas, max_iter, threshold, random_state).
-    # Why: Different datasets need different regularization strength and runtime tradeoffs.
-    #
-    # Optional debug: print number of selected features
-    # if problem_type == "regression":
-    #     support = model.named_steps["select"].get_support()
-    #     print(f"[train.train_model] Selected {support.sum()} features after LassoCV")
-    #
-    # Placeholder (Remove this after implementing your code):
+    # TODO_STUDENT: Add optional debug prints for selected features count, if enabled in config.
+    # Why: Helps verify Lasso feature selection is actually doing something.
     print("Warning: Student has not implemented this section yet")
     # --------------------------------------------------------
     # END STUDENT CODE
